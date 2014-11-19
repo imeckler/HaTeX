@@ -87,7 +87,7 @@ readFileTex = fmap decodeUtf8 . B.readFile
 -- /Warning: /'rendertex'/ does not escape LaTeX reserved characters./
 -- /Use /'protectText'/ to escape them./
 rendertex :: (Render a,LaTeXC l) => a -> l
-rendertex = fromLaTeX . TeXRaw . render
+rendertex = fromLaTeX . LaTeX . return . TeXRaw . render
 
 -- Render instances
 
@@ -102,8 +102,8 @@ instance Render Measure where
 
 -- LaTeX instances
 
-instance Render LaTeX where
-  
+instance Render TeXBlock where
+
   render (TeXRaw t) = t
   
   render (TeXComm name []) = "\\" <> fromString name <> "{}"
@@ -136,8 +136,8 @@ instance Render LaTeX where
    in if null xs then "%\n"
                  else Data.Text.unlines $ fmap ("%" <>) xs
 
-  render (TeXSeq l1 l2) = render l1 <> render l2
-  render TeXEmpty = mempty
+instance Render LaTeX where
+  render (LaTeX bs) = mconcat $ map render bs
 
 instance Render TeXArg where
  render (FixArg l) = "{" <> render l <> "}"

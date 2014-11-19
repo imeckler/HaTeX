@@ -8,6 +8,7 @@ module Text.LaTeX.Base.Syntax
  ( -- * @LaTeX@ datatype
    Measure (..)
  , MathType (..)
+ , TeXBlock (..)
  , LaTeX (..)
  , TeXArg (..)
  , (<>)
@@ -57,8 +58,11 @@ data Measure =
 data MathType = Parentheses | Square | Dollar
   deriving (Eq,Show)
 
+newtype LaTeX = LaTeX [TeXBlock]
+  deriving (Eq, Show, Typeable)
+
 -- | Type of @LaTeX@ blocks.
-data LaTeX =
+data TeXBlock =
    TeXRaw Text -- ^ Raw text.
  | TeXComm String [TeXArg] -- ^ Constructor for commands.
                            -- First argument is the name of the command.
@@ -74,10 +78,6 @@ data LaTeX =
  | TeXLineBreak (Maybe Measure) Bool -- ^ Line break command.
  | TeXBraces LaTeX -- ^ A expression between braces.
  | TeXComment Text -- ^ Comments.
- | TeXSeq LaTeX LaTeX -- ^ Sequencing of 'LaTeX' expressions.
-                      -- Use '<>' preferably.
- | TeXEmpty -- ^ An empty block.
-            -- /Neutral element/ of '<>'.
    deriving (Eq,Show,Typeable)
 
 -- | An argument for a 'LaTeX' command or environment.
@@ -95,13 +95,8 @@ data TeXArg =
 
 -- | Method 'mappend' is strict in both arguments (except in the case when the first argument is 'TeXEmpty').
 instance Monoid LaTeX where
- mempty = TeXEmpty
- mappend TeXEmpty x = x
- mappend x TeXEmpty = x
- -- This equation is to make 'mappend' associative.
- mappend (TeXSeq x y) z = TeXSeq x $ mappend y z
- --
- mappend x y = TeXSeq x y
+ mempty = LaTeX []
+ mappend (LaTeX t1) (LaTeX t2) = LaTeX (t1 ++ t2)
 
 -- Since GHC starting from 7.4 provides (<>) as synonym to 'mappend' (see "Data.Monoid"),
 -- we avoid an overlapping definition with a CPP conditional.
@@ -113,7 +108,7 @@ instance Monoid LaTeX where
 
 -- | Method 'fromString' escapes LaTeX reserved characters using 'protectString'.
 instance IsString LaTeX where
- fromString = TeXRaw . fromString . protectString
+ fromString = LaTeX . pure . TeXRaw . fromString . protectString
 
 -- | Escape LaTeX reserved characters in a 'String'.
 protectString :: String -> String
@@ -161,17 +156,17 @@ lookForCommand = (fmap snd .) . matchCommand . (==)
 -- | Traverse a 'LaTeX' syntax tree and returns the commands (see 'TeXComm' and
 --   'TeXCommS') that matches the condition and their arguments in each call.
 matchCommand :: (String -> Bool) -> LaTeX -> [(String,[TeXArg])]
-matchCommand f (TeXComm str as) =
-  let xs = concatMap (matchCommandArg f) as
-  in  if f str then (str,as) : xs else xs
-matchCommand f (TeXCommS str) = if f str then [(str,[])] else []
-matchCommand f (TeXEnv _ as l) =
-  let xs = concatMap (matchCommandArg f) as
-  in  xs ++ matchCommand f l
-matchCommand f (TeXMath _ l) = matchCommand f l
-matchCommand f (TeXBraces l) = matchCommand f l
-matchCommand f (TeXSeq l1 l2) = matchCommand f l1 ++ matchCommand f l2
-matchCommand _ _ = []
+matchCommand f (LaTeX bs) = concatMap go bs where
+  go (TeXComm str as) =
+    let xs = concatMap (matchCommandArg f) as
+    in  if f str then (str,as) : xs else xs
+  go (TeXCommS str)  = if f str then [(str,[])] else []
+  go (TeXEnv _ as l) =
+    let xs = concatMap (matchCommandArg f) as
+    in  xs ++ matchCommand f l -- TODO: It's a bit annoying to have to pass f parameter around
+  go (TeXMath _ l)  = matchCommand f l
+  go (TeXBraces l)  = matchCommand f l
+  go _              = []
 
 matchCommandArg :: (String -> Bool) -> TeXArg -> [(String,[TeXArg])]
 matchCommandArg f (OptArg  l ) = matchCommand f l
@@ -195,16 +190,16 @@ lookForEnv = (fmap (\(_,as,l) -> (as,l)) .) . matchEnv . (==)
 --   'TeXEnv') that matches the condition, their arguments and their content
 --   in each call.
 matchEnv :: (String -> Bool) -> LaTeX -> [(String,[TeXArg],LaTeX)]
-matchEnv f (TeXComm _ as) = concatMap (matchEnvArg f) as
-matchEnv f (TeXEnv str as l) =
-  let xs = concatMap (matchEnvArg f) as
-      ys = matchEnv f l
-      zs = xs ++ ys
-  in  if f str then (str,as,l) : zs else zs
-matchEnv f (TeXMath _ l) = matchEnv f l
-matchEnv f (TeXBraces l) = matchEnv f l
-matchEnv f (TeXSeq l1 l2) = matchEnv f l1 ++ matchEnv f l2
-matchEnv _ _ = []
+matchEnv f (LaTeX bs) = concatMap go bs where
+  go (TeXComm _ as) = concatMap (matchEnvArg f) as
+  go (TeXEnv str as l) =
+    let xs = concatMap (matchEnvArg f) as
+        ys = matchEnv f l
+        zs = xs ++ ys
+    in  if f str then (str,as,l) : zs else zs
+  go (TeXMath _ l) = matchEnv f l
+  go (TeXBraces l) = matchEnv f l
+  go _             = []
 
 matchEnvArg :: (String -> Bool) -> TeXArg -> [(String,[TeXArg],LaTeX)]
 matchEnvArg f (OptArg  l ) = matchEnv f l
@@ -219,32 +214,32 @@ matchEnvArg f (MParArg ls) = concatMap (matchEnv f) ls
 --   condition and applies a function to them.
 --
 -- > texmap c f = runIdentity . texmapM c (pure . f)
-texmap :: (LaTeX -> Bool) -- ^ Condition.
-       -> (LaTeX -> LaTeX) -- ^ Function to apply when the condition matches.
+texmap :: (TeXBlock -> Bool) -- ^ Condition.
+       -> (TeXBlock -> TeXBlock) -- ^ Function to apply when the condition matches.
        ->  LaTeX -> LaTeX
 texmap c f = runIdentity . texmapM c (pure . f)
 
 -- | Version of 'texmap' where the function returns values in a 'Monad'.
 texmapM :: (Applicative m, Monad m)
-        => (LaTeX -> Bool) -- ^ Condition.
-        -> (LaTeX -> m LaTeX) -- ^ Function to apply when the condition matches.
+        => (TeXBlock -> Bool) -- ^ Condition.
+        -> (TeXBlock -> m TeXBlock) -- ^ Function to apply when the condition matches.
         ->  LaTeX -> m LaTeX
-texmapM c f = go
-  where
-   go l@(TeXComm str as)  = if c l then f l else TeXComm str <$> mapM go' as
-   go l@(TeXEnv str as b) = if c l then f l else TeXEnv str <$> mapM go' as <*> go b
-   go l@(TeXMath t b)     = if c l then f l else TeXMath t <$> go b
-   go l@(TeXBraces b)     = if c l then f l else TeXBraces <$> go b
-   go l@(TeXSeq l1 l2)    = if c l then f l else liftA2 TeXSeq (go l1) (go l2)
-   go l = if c l then f l else pure l
-   --
-   go' (FixArg  l ) = FixArg  <$> go l
-   go' (OptArg  l ) = OptArg  <$> go l
-   go' (MOptArg ls) = MOptArg <$> mapM go ls
-   go' (SymArg  l ) = SymArg  <$> go l
-   go' (MSymArg ls) = MSymArg <$> mapM go ls
-   go' (ParArg  l ) = ParArg  <$> go l
-   go' (MParArg ls) = MParArg <$> mapM go ls
+texmapM c f = tm where
+  tm (LaTeX bs) = LaTeX <$> mapM go bs -- TODO: is this preferrable to passing c, f around
+
+  go l@(TeXComm str as)  = if c l then f l else TeXComm str <$> mapM go' as
+  go l@(TeXEnv str as b) = if c l then f l else TeXEnv str <$> mapM go' as <*> tm b
+  go l@(TeXMath t b)     = if c l then f l else TeXMath t <$> tm b
+  go l@(TeXBraces b)     = if c l then f l else TeXBraces <$> tm b
+  go l = if c l then f l else pure l
+  --
+  go' (FixArg  l ) = FixArg  <$> tm l
+  go' (OptArg  l ) = OptArg  <$> tm l
+  go' (MOptArg ls) = MOptArg <$> mapM tm ls
+  go' (SymArg  l ) = SymArg  <$> tm l
+  go' (MSymArg ls) = MSymArg <$> mapM tm ls
+  go' (ParArg  l ) = ParArg  <$> tm l
+  go' (MParArg ls) = MParArg <$> mapM tm ls
 
 -- | Extract the content of the 'document' environment, if present.
 getBody :: LaTeX -> Maybe LaTeX
@@ -256,9 +251,8 @@ getBody l =
 -- | Extract the preamble of a 'LaTeX' document (everything before the 'document'
 --   environment). It could be empty.
 getPreamble :: LaTeX -> LaTeX
-getPreamble (TeXEnv "document" _ _) = mempty
-getPreamble (TeXSeq l1 l2) = getPreamble l1 <> getPreamble l2
-getPreamble l = l
+-- TODO: Is lambdacase acceptable, or discouraged for compat reasons?
+getPreamble (LaTeX bs) = LaTeX (takeWhile (\b -> case b of { TeXEnv "document" _ _ -> False; _ -> True }) bs)
 
 ---------------------------------------
 -- LaTeX Arbitrary instance
@@ -297,20 +291,20 @@ instance Arbitrary LaTeX where
      -- not getting too large.
      n <- choose (0,16 :: Int)
      case n of
-       0 -> pure TeXEmpty
+       0 -> pure mempty
        1 -> do m <- choose (0,5)
-               TeXComm <$> arbitraryName <*> vectorOf m arbitrary
-       2 -> TeXCommS <$> arbitraryName
+               fmap (LaTeX . pure) (TeXComm <$> arbitraryName <*> vectorOf m arbitrary)
+       2 -> LaTeX . pure . TeXCommS <$> arbitraryName
        3 -> do m <- choose (0,5)
-               TeXEnv <$> arbitraryName <*> vectorOf m arbitrary <*> arbitrary
+               fmap (LaTeX . pure) (TeXEnv <$> arbitraryName <*> vectorOf m arbitrary <*> arbitrary)
        4 -> do m <- choose (0,2)
                let t = [Parentheses,Square,Dollar] !! m
-               TeXMath <$> pure t <*> arbitrary
-       5 -> TeXLineBreak <$> arbitrary <*> arbitrary
-       6 -> TeXBraces <$> arbitrary
-       7 -> TeXComment <$> arbitraryRaw
-       8 -> TeXSeq <$> arbitrary <*> arbitrary
-       _ -> TeXRaw <$> arbitraryRaw
+               fmap (LaTeX . pure) (TeXMath <$> pure t <*> arbitrary)
+       5 -> fmap (LaTeX . pure) (TeXLineBreak <$> arbitrary <*> arbitrary)
+       6 -> LaTeX . pure . TeXBraces <$> arbitrary
+       7 -> LaTeX . pure . TeXComment <$> arbitraryRaw
+       8 -> liftA2 (<>) arbitrary arbitrary
+       _ -> LaTeX . pure . TeXRaw <$> arbitraryRaw
 
 instance Arbitrary TeXArg where
   arbitrary = do
@@ -326,3 +320,4 @@ instance Arbitrary TeXArg where
        5 -> do m <- choose (1,5)
                MParArg <$> vectorOf m arbitrary
        _ -> FixArg <$> arbitrary
+

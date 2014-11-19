@@ -30,6 +30,9 @@ import Text.LaTeX.Base.Syntax
 import Data.Monoid
 import Data.String
 
+-- TODO: The purpose of this module is unclear to me, so I'm not really
+-- sure how to modify it for the new type.
+
 -- | This is the class of 'LaTeX' code generators. It has 'Monoid' and 'IsString' as
 --   superclasses.
 class (Monoid l,IsString l) => LaTeXC l where
@@ -66,7 +69,7 @@ liftL3 f x y z = liftListL (\[x,y,z] -> f x y z) [x,y,z]
 -- > comm0 str = fromLaTeX $ TeXComm str []
 --
 comm0 :: LaTeXC l => String -> l
-comm0 str = fromLaTeX $ TeXComm str []
+comm0 str = fromLaTeX . LaTeX . return $ TeXComm str []
 
 -- | A one parameter command generator using the name of the command.
 --   The parameter will be rendered as a fixed argument.
@@ -74,7 +77,7 @@ comm0 str = fromLaTeX $ TeXComm str []
 -- > comm1 str = liftL $ \l -> TeXComm str [FixArg l]
 --
 comm1 :: LaTeXC l => String -> l -> l
-comm1 str = liftL $ \l -> TeXComm str [FixArg l]
+comm1 str = liftL $ \l -> LaTeX . return $ TeXComm str [FixArg l]
 
 -- | Like 'comm0' but using 'TeXCommS', i.e. no \"{}\" will be inserted to protect
 -- the command's end.
@@ -82,11 +85,11 @@ comm1 str = liftL $ \l -> TeXComm str [FixArg l]
 -- > commS = fromLaTeX . TeXCommS
 --
 commS :: LaTeXC l => String -> l
-commS = fromLaTeX . TeXCommS
+commS = fromLaTeX . LaTeX . return . TeXCommS
 
 -- | A lifted version of the 'TeXBraces' constructor.
 --
 -- > braces = liftL TeXBraces
 --
 braces :: LaTeXC l => l -> l
-braces = liftL TeXBraces
+braces = liftL (LaTeX . return . TeXBraces)

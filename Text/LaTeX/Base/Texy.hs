@@ -22,7 +22,7 @@ instance Texy LaTeX where
  texy = fromLaTeX
 
 instance Texy Text where
- texy = fromLaTeX . TeXRaw . protectText
+ texy = fromLaTeX . LaTeX . return . TeXRaw . protectText
 
 instance Texy Int where
  texy = rendertex

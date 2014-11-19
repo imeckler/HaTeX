@@ -25,6 +25,7 @@ import Data.Text
 import Data.Maybe
 import Control.Arrow
 import Data.Monoid
+import Control.Monad
 
 -- | List of possible warnings.
 data Warning =
@@ -62,26 +63,20 @@ checkClass :: TeXCheck
 checkClass = TC $ \l -> if execState (classcheck l) False then [] else [NoClassSelected]
 
 classcheck :: LaTeX -> BoolSt ()
-classcheck (TeXComm c _) =
- case c of
-  "documentclass" -> put True
-  _ -> return ()
-classcheck (TeXBraces l) = classcheck l
-classcheck (TeXSeq l1 l2) = classcheck l1 >> classcheck l2
-classcheck _ = return ()
+classcheck (LaTeX bs) = mapM_ go bs where
+  go (TeXComm c _) = when (c == "documentclass") (put True)
+  go (TeXBraces l) = classcheck l
+  go _ = return ()
 
 -- | Check if the 'document' environment is called in a 'LaTeX'.
 checkDoc :: TeXCheck
 checkDoc = TC $ \l -> if execState (doccheck l) False then [] else [NoDocumentInserted]
 
 doccheck :: LaTeX -> BoolSt ()
-doccheck (TeXEnv n _ _) =
- case n of
-  "document" -> put True
-  _ -> return ()
-doccheck (TeXBraces l) = doccheck l
-doccheck (TeXSeq l1 l2) = doccheck l1 >> doccheck l2
-doccheck _ = return ()
+doccheck (LaTeX bs) = mapM_ go bs where
+  go (TeXEnv n _ _) = when (n == "document") $ put True
+  go (TeXBraces l)  = doccheck l
+  go _              = return ()
 
 -- Checking labels
 
@@ -102,17 +97,17 @@ checkLabels :: TeXCheck
 checkLabels = TC $ \l -> catMaybes . fmap labWarnToWarning $ execState (labcheck l) []
 
 labcheck :: LaTeX -> LabSt ()
-labcheck (TeXComm c [FixArg (TeXRaw n)]) =
- case c of
-  "label"   -> newlab n
-  "ref"     -> newref n
-  "pageref" -> newref n
-  _ -> return ()
-labcheck (TeXEnv _ _ l) = labcheck l
-labcheck (TeXMath _ l) = labcheck l
-labcheck (TeXBraces l) = labcheck l
-labcheck (TeXSeq l1 l2) = labcheck l1 >> labcheck l2
-labcheck _ = return ()
+labcheck (LaTeX bs) = mapM_ go bs where
+  go (TeXComm c [FixArg (LaTeX [TeXRaw n])]) =
+    case c of
+      "label"   -> newlab n
+      "ref"     -> newref n
+      "pageref" -> newref n
+      _ -> return ()
+  go (TeXEnv _ _ l) = labcheck l
+  go (TeXMath _ l) = labcheck l
+  go (TeXBraces l) = labcheck l
+  go _ = return ()
 
 newlab :: Text -> LabSt ()
 newlab t = do
